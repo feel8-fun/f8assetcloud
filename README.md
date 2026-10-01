@@ -1,6 +1,20 @@
-# f8assetcloud_worker
+# f8assetcloud
 
 Cloudflare Worker + D1 backend for Feel8 asset management, rebuilt around `Hono + Better Auth`.
+
+## Repository and versioning
+
+This repository owns the cloud API, authentication, D1 migrations, and management console.
+It evolves independently of [Feel8 Studio](https://github.com/feel8-fun/f8studio), which pins a published commit under its `cloud/` submodule.
+Use the repository root for the commands below (in a Studio checkout, `cd cloud`).
+
+The project version is tracked in `package.json`; releases use `vX.Y.Z` Git tags.
+The console shares the project release version. Asset revisions and the `/v1` HTTP API are separate from the project release version.
+Breaking public API changes require an explicit compatibility and migration plan for Studio clients.
+Cloud deployment is performed separately from Studio releases.
+
+Requires Node.js 24 and npm. Install with `npm ci` and `npm --prefix console_web ci`, then run `npm run check`.
+CI runs backend tests, console tests, and the production build; it does not deploy or modify remote databases.
 
 ## Architecture
 
@@ -243,7 +257,7 @@ Friendly callback pages now live at:
 ## Local development
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 cp .dev.vars.example .dev.vars
 npm install
 npm --prefix console_web install
@@ -255,14 +269,14 @@ npx wrangler dev
 Single-origin mode:
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npm run dev:single
 ```
 
 ## Deployment
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npm run web:build
 npm run d1:migrate
 npx wrangler deploy
@@ -273,7 +287,7 @@ npx wrangler deploy
 Production reset:
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npx wrangler d1 delete feel8-assets -y
 npx wrangler d1 create feel8-assets --location enam
 ```
@@ -281,7 +295,7 @@ npx wrangler d1 create feel8-assets --location enam
 After `wrangler d1 create`, copy the new UUID into `[[d1_databases]].database_id` in `wrangler.toml`, then run:
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npm run d1:migrate
 npm run web:build
 npm run deploy
@@ -290,7 +304,7 @@ npm run deploy
 Preview reset:
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npx wrangler d1 delete feel8-assets-preview -y
 npx wrangler d1 create feel8-assets-preview --location enam
 ```
@@ -298,7 +312,7 @@ npx wrangler d1 create feel8-assets-preview --location enam
 After `wrangler d1 create`, copy the new UUID into `[[d1_databases]].preview_database_id` in `wrangler.toml`, then run:
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npm run d1:migrate:preview
 ```
 
@@ -309,20 +323,20 @@ Reset an existing D1 database in place without creating a new database ID:
 Production:
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npm run d1:reset:remote
 ```
 
 Preview:
 
 ```bash
-cd packages/f8assetcloud_worker
+cd /path/to/f8assetcloud
 npm run d1:reset:preview
 ```
 
 This in-place reset approach uses an explicit ordered table drop list that is compatible with remote D1 execution, then reapplies the current baseline migration.
-The reset SQL lives in [scripts/reset_d1.sh](/home/sxs/SS/Feel8/f8studio/packages/f8assetcloud_worker/scripts/reset_d1.sh) so the drop order stays centralized instead of being duplicated inside `package.json`.
-By default the script reads `database_name` from [wrangler.toml](/home/sxs/SS/Feel8/f8studio/packages/f8assetcloud_worker/wrangler.toml). You can override it with `D1_DATABASE_NAME=...` or point to a different config with `WRANGLER_TOML_PATH=...`.
+The reset SQL lives in [scripts/reset_d1.sh](scripts/reset_d1.sh) so the drop order stays centralized instead of being duplicated inside `package.json`.
+By default the script reads `database_name` from [wrangler.toml](wrangler.toml). You can override it with `D1_DATABASE_NAME=...` or point to a different config with `WRANGLER_TOML_PATH=...`.
 
 ## Notes
 

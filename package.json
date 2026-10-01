@@ -1,5 +1,5 @@
 {
-  "name": "@feel8/f8assetcloud-worker",
+  "name": "@feel8/assetcloud",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,7 +14,9 @@
     "d1:migrate:local": "wrangler d1 migrations apply DB --local",
     "d1:migrate:preview": "wrangler d1 migrations apply DB --remote --preview",
     "d1:reset:remote": "sh ./scripts/reset_d1.sh remote",
-    "d1:reset:preview": "sh ./scripts/reset_d1.sh preview"
+    "d1:reset:preview": "sh ./scripts/reset_d1.sh preview",
+    "test:console": "npm --prefix ./console_web run test",
+    "check": "npm test && npm run test:console && npm run web:build"
   },
   "devDependencies": {
     "wrangler": "^4.80.0"
@@ -25,5 +27,6 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.10",
     "zod": "^4.3.6"
-  }
+  },
+  "version": "0.1.0"
 }
