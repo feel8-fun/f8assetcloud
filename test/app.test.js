@@ -10,6 +10,7 @@ import { createApp, resetWorkerCachesForTesting } from '../src/app.js';
 import worker from '../src/index.js';
 import { authPasswordHashVersion, hashAuthPassword, verifyAuthPassword } from '../src/password.js';
 import { createSqliteD1Database } from '../test_support/sqlite_d1_adapter.js';
+import { validatePublication } from '../src/library/publication.ts';
 
 const TEST_AUTH_SECRET = '0123456789abcdef0123456789abcdef';
 const TEST_PASSWORD = 'password123';
@@ -59,7 +60,7 @@ async function jsonRequest(app, env, pathname, { method, payload, cookie, origin
     cookie
     && requestMethod !== 'GET'
     && requestMethod !== 'HEAD'
-    && String(pathname).startsWith('/v1/')
+    && /^\/v[12]\//.test(String(pathname))
   ) {
     headers.origin = new URL(String(env.AUTH_BASE_URL || 'http://worker.test')).origin;
   }
@@ -77,6 +78,20 @@ async function jsonRequest(app, env, pathname, { method, payload, cookie, origin
     headers: response.headers,
   };
 }
+
+test('v2 portable Library reuses authentication, rejects cross-origin cookie writes and readonly publication',async()=>{
+  const app=createApp();const env=createEnv();
+  const user=await createVerifiedSession(app,env,{name:'Publisher',email:'publisher@example.com'});
+  const publication=await validatePublication(JSON.parse(fs.readFileSync(new URL('./fixtures/component-v1.json',import.meta.url),'utf8')));
+  const input={requestId:'portable-publish',assetId:null,expectedVersion:0,kind:'component',name:'Portable Script',description:'',tags:['script'],visibility:'public',changeSummary:'',publication};
+  assert.equal((await jsonRequest(app,env,'/v2/library/publish',{method:'POST',payload:input})).status,401);
+  assert.equal((await jsonRequest(app,env,'/v2/library/publish',{method:'POST',payload:input,cookie:user.cookie,origin:'https://other.test'})).status,403);
+  const published=await jsonRequest(app,env,'/v2/library/publish',{method:'POST',payload:input,cookie:user.cookie});assert.equal(published.status,200);
+  await env.DB.prepare("UPDATE user SET role='readonly' WHERE id=?").bind(user.userId).run();
+  assert.equal((await jsonRequest(app,env,'/v2/library/publish',{method:'POST',payload:{...input,requestId:'readonly'},cookie:user.cookie})).status,403);
+  assert.equal((await jsonRequest(app,env,`/v2/library/${published.json.assetId}/relations/like`,{method:'PUT',cookie:user.cookie})).status,200);
+  assert.equal((await jsonRequest(app,env,'/v2/library')).json.items[0].kind,'component');
+});
 
 async function captureConsoleInfo(run) {
   const logs = [];

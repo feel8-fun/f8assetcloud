@@ -12,6 +12,9 @@ import { registerOpenApiRoutes } from './openapi.js';
 import { authPasswordHashVersion, hashAuthPassword, verifyAuthPassword } from './password.js';
 import { AssetConflictError, AssetNotFoundError, AssetPermissionError, AssetValidationError, AssetRepository } from './repository.js';
 import { decompressGzip, isPlainObject, stringOrDefault, toBoolean } from './utils.js';
+import { registerLibraryRoutes } from './library/routes.ts';
+import { CloudError } from './library/contracts.ts';
+import { ZodError } from 'zod';
 
 const AUTH_BASE_PATH = '/api/auth';
 const DESKTOP_AUTH_BASE_PATH = '/v1/auth/desktop';
@@ -497,6 +500,12 @@ export function createApp() {
     });
   });
 
+  registerLibraryRoutes(app, {
+    viewer: async (c) => optionalAuthenticatedUser({ auth: await getOrCreateAuth(c.env,c.req.raw), db:c.env.DB, request:c.req.raw }),
+    member: async (c) => requireAuthenticatedUser({ auth: await getOrCreateAuth(c.env,c.req.raw), db:c.env.DB, request:c.req.raw, allowedOrigins:calculateAllowedOrigins(c.env) }),
+    writer: async (c) => requireAssetWriteUser({ auth: await getOrCreateAuth(c.env,c.req.raw), db:c.env.DB, repo:new AssetRepository(c.env.DB), request:c.req.raw, allowedOrigins:calculateAllowedOrigins(c.env) }),
+    readJson: readJsonBody,
+  });
   app.on(['GET', 'HEAD'], '*', async (c) => serveFrontend(c.req.raw, c.env, new URL(c.req.raw.url)));
 
   app.all('*', () => jsonResponse(404, { message: 'not found' }));
@@ -3024,6 +3033,8 @@ function concatUint8Arrays(chunks, totalBytes) {
 }
 
 function handleError(error) {
+  if (error instanceof CloudError) return jsonResponse(error.status,{code:error.code,message:error.message});
+  if (error instanceof ZodError) return jsonResponse(400,{code:'invalid_request',message:error.message});
   if (error instanceof HttpError) {
     return jsonResponse(error.status, { message: error.message, ...error.payload });
   }

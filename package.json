@@ -16,12 +16,18 @@
     "d1:reset:remote": "sh ./scripts/reset_d1.sh remote",
     "d1:reset:preview": "sh ./scripts/reset_d1.sh preview",
     "test:console": "npm --prefix ./console_web run test",
-    "check": "npm test && npm run test:console && npm run web:build"
+    "typecheck": "tsc -p tsconfig.json",
+    "test:d1": "node scripts/check_d1_migrations.js",
+    "check": "npm run typecheck && npm test && npm run test:d1 && npm run test:console && npm run web:build"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "@types/node": "^26.6.4",
+    "typescript": "^7.0.2",
     "wrangler": "^4.80.0"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "better-auth": "^1.5.6",
     "chanfana": "^3.3.0",
     "drizzle-orm": "^0.45.2",

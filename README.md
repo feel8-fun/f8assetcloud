@@ -16,6 +16,28 @@ Cloud deployment is performed separately from Studio releases.
 Requires Node.js 24 and npm. Install with `npm ci` and `npm --prefix console_web ci`, then run `npm run check`.
 CI runs backend tests, console tests, and the production build; it does not deploy or modify remote databases.
 
+## Portable Library v2
+
+P2 adds `/v2/library` alongside the legacy `/v1` API. Apply the **new** `0002_publication_library.sql` migration; it preserves existing users and legacy blobs. Do not reset D1 to upgrade.
+
+The new API accepts `f8publication/1` envelopes with `f8graph/4` or `f8component/1` content. Variant is a single-node component template. Generated schema/types and hash/history fixtures under `contracts/` and `test/fixtures/` are published by Studio's contract generator; the Worker does not load Python or Studio.
+
+- `GET /v2/library/capabilities`
+- `GET /v2/library?q=...&cursor=...&view=all|mine|following`
+- `POST /v2/library/publish` with requestId, nullable assetId, expectedVersion, kind, listing metadata, changeSummary, and publication
+- `GET /v2/library/:assetId` and `/versions`
+- `GET /v2/library/:assetId/versions/:version` for a fixed immutable publication
+- `PUT /v2/library/:assetId/metadata` for name, description, tags and visibility
+- `PUT|DELETE /v2/library/:assetId/relations/like|follow|follow-author`
+
+New publications use expectedVersion 0 and null assetId. Updates require the owner's current version. A single database command atomically checks the version, writes content and stores a durable request receipt. Equal content hashes do not increase versions; replaying the same request returns its original result. Metadata does not alter content versions. Fixed version content is limited to 1 MiB for D1; attachments remain outside this contract.
+
+Auth reuses browser cookies with origin checks or desktop bearer tokens. Readonly accounts can browse and use community actions, but cannot publish. Private content is accessible only to its owner. Derivative publication records a fixed, readable source and checks that version's reuse license; supported permissive licenses permit derivatives, supported copyleft/ShareAlike licenses require the same declared license. Unknown or non-reuse licenses do not silently grant publication rights.
+
+WebStudio configures a Cloud origin in Assets and uses its existing PKCE loopback login. Tokens stay on Studio Server. It queries this catalog directly, fetches fixed content only for preview/add, and never mirrors the catalog into an editable local library. Draft creation and publication are explicit. The old console continues to manage legacy content; console convergence and old-blob conversion are separate P4 work.
+
+`npm run check` includes TypeScript, API/auth/legacy regressions, local D1 migrations in a temporary database, console tests and build. `test_support/p2_server.js` is an isolated in-memory HTTP harness for Studio and Playwright acceptance; it is never the production Worker entrypoint.
+
 ## Architecture
 
 - Auth is provided by Better Auth at `/api/auth/*`

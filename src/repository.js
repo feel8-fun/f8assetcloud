@@ -197,6 +197,12 @@ export class AssetRepository {
   }
 
   async adminPurgeAllAssets() {
+    const cloudCounts = await this._db.prepare(`SELECT
+      (SELECT COUNT(*) FROM cloud_assets) AS assets,
+      (SELECT COUNT(*) FROM cloud_versions) AS versions,
+      (SELECT COUNT(*) FROM cloud_asset_follows) AS follows`).first();
+    await this._db.prepare('DELETE FROM cloud_assets').run();
+    await this._db.prepare('DELETE FROM cloud_publish_requests').run();
     const deletedSubscriptionsResult = await this._db.prepare(
       'DELETE FROM asset_subscriptions',
     ).run();
@@ -214,10 +220,10 @@ export class AssetRepository {
       'DELETE FROM asset_heads',
     ).run();
     return {
-      deletedAssetSubscriptions: Number(deletedSubscriptionsResult.meta?.changes || 0),
-      deletedAssetVersions: Number(deletedVersionsResult.meta?.changes || 0),
+      deletedAssetSubscriptions: Number(deletedSubscriptionsResult.meta?.changes || 0) + Number(cloudCounts?.follows || 0),
+      deletedAssetVersions: Number(deletedVersionsResult.meta?.changes || 0) + Number(cloudCounts?.versions || 0),
       deletedVariantDetails,
-      deletedAssets: Number(deletedHeadsResult.meta?.changes || 0),
+      deletedAssets: Number(deletedHeadsResult.meta?.changes || 0) + Number(cloudCounts?.assets || 0),
     };
   }
 
@@ -1262,9 +1268,10 @@ export class AssetRepository {
 
   async hasAssets(userId) {
     const row = await this._db.prepare(
-      'SELECT COUNT(*) AS count FROM asset_heads WHERE owner_user_id = ?',
+      `SELECT (SELECT COUNT(*) FROM asset_heads WHERE owner_user_id = ?)
+        + (SELECT COUNT(*) FROM cloud_assets WHERE owner_user_id = ?) AS count`,
     )
-      .bind(String(userId))
+      .bind(String(userId), String(userId))
       .first();
     return Number(row?.count || 0) > 0;
   }
