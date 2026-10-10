@@ -1,0 +1,31 @@
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const api = vi.hoisted(() => ({ resolveAsset: vi.fn(), getAssetDetail: vi.fn(), listAssetVersions: vi.fn(), getAssetVersionContent: vi.fn() }));
+vi.mock('../lib/api.js', () => api);
+import { useAsset } from './useAsset.js';
+afterEach(cleanup);
+beforeEach(() => { Object.values(api).forEach(mock => mock.mockReset()); api.resolveAsset.mockResolvedValue({ assetType: 'component' }); api.getAssetDetail.mockImplementation((_type, id) => Promise.resolve({ assetId: id })); api.listAssetVersions.mockResolvedValue({ versions: [] }); });
+it('scopes pending content and cache to the selected asset', async () => {
+  let resolveOld;
+  const old = new Promise(r => { resolveOld = r; });
+  api.getAssetVersionContent.mockImplementation((_type, id) => id === 'old' ? old : Promise.resolve({ content: 'new' }));
+  const { result, rerender } = renderHook(({ id }) => useAsset(id), { initialProps: { id: 'old' } });
+  await waitFor(() => expect(result.current.asset?.assetId).toBe('old'));
+  let pending;
+  act(() => { pending = result.current.loadVersionContent(1); void result.current.loadVersionContent(1); });
+  expect(api.getAssetVersionContent).toHaveBeenCalledTimes(1);
+  rerender({ id: 'new' });
+  await waitFor(() => expect(result.current.asset?.assetId).toBe('new'));
+  await act(async () => { resolveOld({ content: 'old' }); expect(await pending).toBeNull(); });
+  expect(result.current.versionContentByNumber).toEqual({});
+  await act(async () => { await result.current.loadVersionContent(1); });
+  expect(result.current.versionContentByNumber).toEqual({ 1: { content: 'new' } });
+});
+it('clears loading and details when selection is removed', async () => {
+  api.resolveAsset.mockReturnValue(new Promise(() => {}));
+  const { result, rerender } = renderHook(({ id }) => useAsset(id), { initialProps: { id: 'old' } });
+  expect(result.current.loading).toBe(true);
+  rerender({ id: '' });
+  expect(result.current.loading).toBe(false);
+  expect(result.current.asset).toBeNull();
+});

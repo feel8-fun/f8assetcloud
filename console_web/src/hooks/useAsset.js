@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { getAssetDetail, getAssetVersionContent, listAssetVersions, resolveAsset } from '../lib/api.js';
 
@@ -9,9 +9,16 @@ export function useAsset(assetId) {
   const [versionContentByNumber, setVersionContentByNumber] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const requestOwner = useRef(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const current = { assetId, assetType: '', content: {}, pending: new Map() };
+    requestOwner.current = current;
+    setAssetType('');
+    setAsset(null);
+    setVersions([]);
+    setVersionContentByNumber({});
+    setLoading(false);
     if (!assetId) {
       setAssetType('');
       setAsset(null);
@@ -27,18 +34,20 @@ export function useAsset(assetId) {
       try {
         const resolved = await resolveAsset(assetId);
         const resolvedType = String(resolved?.assetType || '');
+        if (requestOwner.current !== current) return;
         const [detail, versionPage] = await Promise.all([
           getAssetDetail(resolvedType, assetId),
           listAssetVersions(resolvedType, assetId),
         ]);
-        if (cancelled) {
+        if (requestOwner.current !== current) {
           return;
         }
         setAssetType(resolvedType);
+        current.assetType = resolvedType;
         setAsset(detail);
         setVersions(Array.isArray(versionPage?.versions) ? versionPage.versions : []);
       } catch (errorValue) {
-        if (cancelled) {
+        if (requestOwner.current !== current) {
           return;
         }
         setAssetType('');
@@ -46,30 +55,34 @@ export function useAsset(assetId) {
         setVersions([]);
         setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
       } finally {
-        if (!cancelled) {
+        if (requestOwner.current === current) {
           setLoading(false);
         }
       }
     })();
     return () => {
-      cancelled = true;
+      if (requestOwner.current === current) requestOwner.current = null;
     };
   }, [assetId]);
 
   async function loadVersionContent(versionNumber) {
     const key = String(versionNumber);
-    if (!assetType || !assetId) {
+    const current = requestOwner.current;
+    if (!current?.assetType || current.assetId !== assetId) {
       return null;
     }
-    if (Object.prototype.hasOwnProperty.call(versionContentByNumber, key)) {
-      return versionContentByNumber[key];
+    if (Object.prototype.hasOwnProperty.call(current.content, key)) {
+      return current.content[key];
     }
-    const payload = await getAssetVersionContent(assetType, assetId, versionNumber);
-    setVersionContentByNumber((previous) => ({
-      ...previous,
-      [key]: payload,
-    }));
-    return payload;
+    if (current.pending.has(key)) return current.pending.get(key);
+    const pending = getAssetVersionContent(current.assetType, assetId, versionNumber).then((payload) => {
+      if (requestOwner.current !== current) return null;
+      current.content[key] = payload;
+      setVersionContentByNumber({ ...current.content });
+      return payload;
+    }).finally(() => current.pending.delete(key));
+    current.pending.set(key, pending);
+    return pending;
   }
 
   return {

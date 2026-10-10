@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { listAssets } from '../lib/api.js';
 
 function mergeAssetEntries(pages) {
-  return pages
-    .flatMap((page) => Array.isArray(page?.entries) ? page.entries : [])
+  const entries = pages.flatMap((page) => Array.isArray(page?.entries) ? page.entries : []);
+  return [...new Map(entries.map((entry) => [
+    `${entry.assetType}:${entry.assetId || entry.componentId || entry.variantId}`, entry,
+  ])).values()]
     .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
 }
 
@@ -12,15 +14,20 @@ export function useAssets({ owner = '', initialType = 'all', initialQuery = '' }
   const [assetType, setAssetType] = useState(initialType);
   const [query, setQuery] = useState(initialQuery);
   const [entries, setEntries] = useState([]);
-  const [nextCursor, setNextCursor] = useState(null);
+  const [cursors, setCursors] = useState({});
+  const requestOwner = useRef(null);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    let cancelled = false;
+    const current = { owner, assetType, query, cursors: {}, loadingMore: false };
+    requestOwner.current = current;
     async function loadInitial() {
       setLoading(true);
+      setLoadingMore(false);
+      setEntries([]);
+      setCursors({});
       setError('');
       try {
         const types = assetType === 'all' ? ['component', 'variant'] : [assetType];
@@ -28,52 +35,56 @@ export function useAssets({ owner = '', initialType = 'all', initialQuery = '' }
           owner,
           q: query,
         })));
-        if (cancelled) {
+        if (requestOwner.current !== current) {
           return;
         }
         setEntries(mergeAssetEntries(pages));
-        if (types.length === 1) {
-          setNextCursor(pages[0]?.nextCursor || null);
-        } else {
-          setNextCursor(null);
-        }
+        current.cursors = Object.fromEntries(types.map((type, index) => [type, pages[index]?.nextCursor || null]));
+        setCursors(current.cursors);
       } catch (errorValue) {
-        if (cancelled) {
+        if (requestOwner.current !== current) {
           return;
         }
         setEntries([]);
-        setNextCursor(null);
+        setCursors({});
         setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
       } finally {
-        if (!cancelled) {
+        if (requestOwner.current === current) {
           setLoading(false);
         }
       }
     }
     void loadInitial();
     return () => {
-      cancelled = true;
+      if (requestOwner.current === current) requestOwner.current = null;
     };
   }, [assetType, owner, query]);
 
   async function loadMore() {
-    if (!nextCursor || assetType === 'all') {
+    const current = requestOwner.current;
+    if (!current || current.owner !== owner || current.assetType !== assetType || current.query !== query || current.loadingMore) {
       return;
     }
+    const types = Object.keys(current.cursors).filter((type) => current.cursors[type]);
+    if (types.length === 0) return;
+    current.loadingMore = true;
     setLoadingMore(true);
     setError('');
     try {
-      const page = await listAssets(assetType, {
+      const pages = await Promise.all(types.map((type) => listAssets(type, {
         owner,
         q: query,
-        cursor: nextCursor,
-      });
-      setEntries((previous) => previous.concat(Array.isArray(page?.entries) ? page.entries : []));
-      setNextCursor(page?.nextCursor || null);
+        cursor: current.cursors[type],
+      })));
+      if (requestOwner.current !== current) return;
+      setEntries((previous) => mergeAssetEntries([{ entries: previous }, ...pages]));
+      current.cursors = { ...current.cursors, ...Object.fromEntries(types.map((type, index) => [type, pages[index]?.nextCursor || null])) };
+      setCursors(current.cursors);
     } catch (errorValue) {
-      setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
+      if (requestOwner.current === current) setError(errorValue instanceof Error ? errorValue.message : String(errorValue));
     } finally {
-      setLoadingMore(false);
+      current.loadingMore = false;
+      if (requestOwner.current === current) setLoadingMore(false);
     }
   }
 
@@ -81,7 +92,7 @@ export function useAssets({ owner = '', initialType = 'all', initialQuery = '' }
     assetType,
     entries,
     error,
-    hasMore: Boolean(nextCursor) && assetType !== 'all',
+    hasMore: Object.values(cursors).some(Boolean),
     loading,
     loadingMore,
     loadMore,
