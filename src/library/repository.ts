@@ -1,4 +1,4 @@
-import { CloudError, type AssetRow, type CloudUser, type PublishInput, type VersionRow } from './contracts.ts';
+import { CloudError, type AssetRow, type CloudUser, type LibraryKindFilter, type PublishInput, type VersionRow } from './contracts.ts';
 import { hashValue } from './publication.ts';
 import { Buffer } from 'node:buffer';
 
@@ -15,6 +15,9 @@ export class LibraryRepository {
       .first<{fingerprint:string;asset_id:string;result_version:number;result_changed:number;content_hash:string}>();
     if (receipt) {
       if (receipt.fingerprint !== fingerprint) throw new CloudError(409,'idempotency_conflict','Request ID was already used for a different publication');
+      if (!await this.db.prepare('SELECT asset_id FROM cloud_assets WHERE asset_id=? AND owner_user_id=?')
+        .bind(receipt.asset_id,user.userId).first())
+        throw new CloudError(410,'publication_deleted','This publication was deleted; publish again with a new request ID');
       return {assetId:receipt.asset_id,version:receipt.result_version,contentHash:receipt.content_hash,changed:receipt.result_changed===1};
     }
     if ((input.assetId === null) !== (input.expectedVersion === 0)) throw new CloudError(400, 'invalid_version', 'New assets use null assetId and expectedVersion 0');
@@ -56,7 +59,7 @@ export class LibraryRepository {
     if (!row) throw new Error('Publication receipt missing after atomic command');
     return { assetId: row.asset_id, version: row.result_version, contentHash: row.content_hash, changed: row.result_changed === 1 };
   }
-  async search(userId: string | null, query: string, cursor: string, view: string) {
+  async search(userId: string | null, query: string, cursor: string, view: string, kind: LibraryKindFilter = 'all') {
     const args: (string | number | null)[] = [userId];
     let sql = `SELECT a.*,u.name AS author_name FROM cloud_assets a JOIN user u ON u.id=a.owner_user_id
       WHERE (a.visibility='public' OR a.owner_user_id=?)`;
@@ -65,6 +68,7 @@ export class LibraryRepository {
       sql += ` AND (EXISTS(SELECT 1 FROM cloud_asset_follows f WHERE f.asset_id=a.asset_id AND f.user_id=?)
         OR EXISTS(SELECT 1 FROM cloud_author_follows f WHERE f.author_id=a.owner_user_id AND f.user_id=?))`; args.push(userId,userId);
     }
+    if (kind !== 'all') { sql += ' AND a.kind=?'; args.push(kind); }
     for (const term of query.trim().split(/\s+/).filter(Boolean).slice(0, 16)) {
       sql += ' AND (a.name LIKE ? ESCAPE \'\\\' OR a.description LIKE ? ESCAPE \'\\\' OR a.tags_json LIKE ? ESCAPE \'\\\' OR u.name LIKE ? ESCAPE \'\\\')';
       const pattern = `%${term.replace(/[\\%_]/g, '\\$&')}%`; args.push(pattern,pattern,pattern,pattern);
@@ -72,14 +76,17 @@ export class LibraryRepository {
     if (cursor) {
       let parsed: unknown;
       try { parsed = JSON.parse(Buffer.from(cursor,'base64url').toString('utf8')); } catch (error) { if (!(error instanceof Error)) throw error; throw new CloudError(400,'invalid_cursor','Invalid Library cursor'); }
-      if (!Array.isArray(parsed) || parsed.length !== 4 || !parsed.every((v) => typeof v === 'string') || parsed[2] !== query || parsed[3] !== view)
+      // Existing unfiltered cursors remain valid. A filtered cursor is scoped
+      // to its kind so it cannot skip results after switching the filter.
+      if (!Array.isArray(parsed) || (parsed.length !== 4 && parsed.length !== 5) || !parsed.every((v) => typeof v === 'string') ||
+          parsed[2] !== query || parsed[3] !== view || (parsed[4] ?? 'all') !== kind)
         throw new CloudError(400,'invalid_cursor','Cursor does not belong to this search');
       sql += ' AND (a.name COLLATE NOCASE > ? OR (a.name COLLATE NOCASE = ? AND a.asset_id > ?))'; args.push(parsed[0]!,parsed[0]!,parsed[1]!);
     }
     sql += ' ORDER BY a.name COLLATE NOCASE,a.asset_id LIMIT 31';
     const result = await this.db.prepare(sql).bind(...args).all<AssetRow>();
     const rows = result.results.slice(0,30); const last = rows.at(-1);
-    return { items: rows.map(summary), nextCursor: result.results.length > 30 && last ? Buffer.from(JSON.stringify([last.name,last.asset_id,query,view]),'utf8').toString('base64url') : null };
+    return { items: rows.map(summary), nextCursor: result.results.length > 30 && last ? Buffer.from(JSON.stringify([last.name,last.asset_id,query,view,kind]),'utf8').toString('base64url') : null };
   }
   async asset(assetId: string, userId: string | null): Promise<AssetRow> {
     const row = await this.db.prepare(`SELECT a.*,u.name AS author_name FROM cloud_assets a JOIN user u ON u.id=a.owner_user_id
@@ -95,8 +102,10 @@ export class LibraryRepository {
   }
   async versions(assetId: string, userId: string | null) {
     await this.asset(assetId,userId);
-    return (await this.db.prepare('SELECT version,content_hash,created_at,change_summary FROM cloud_versions WHERE asset_id=? ORDER BY version DESC').bind(assetId).all<VersionRow>()).results
-      .map((row) => ({ version:row.version,contentHash:row.content_hash,createdAt:row.created_at,note:row.change_summary }));
+    return (await this.db.prepare(`SELECT version,content_hash,created_at,change_summary,
+      json_extract(publication_json,'$.manifest.license') AS license FROM cloud_versions WHERE asset_id=? ORDER BY version DESC`)
+      .bind(assetId).all<{version:number;content_hash:string;created_at:string;change_summary:string;license:string}>()).results
+      .map((row) => ({ version:row.version,contentHash:row.content_hash,createdAt:row.created_at,note:row.change_summary,license:row.license }));
   }
   async metadata(assetId: string, userId: string, input: { name:string;description:string;tags:string[];visibility:string }) {
     const row = await this.asset(assetId,userId);
@@ -104,6 +113,24 @@ export class LibraryRepository {
     await this.db.prepare('UPDATE cloud_assets SET name=?,description=?,tags_json=?,visibility=?,updated_at=? WHERE asset_id=? AND owner_user_id=?')
       .bind(input.name,input.description,JSON.stringify(input.tags),input.visibility,new Date().toISOString(),assetId,userId).run();
     return summary(await this.asset(assetId,userId));
+  }
+  async deletePublication(assetId: string, userId: string) {
+    let row: AssetRow;
+    try { row = await this.asset(assetId,userId); }
+    catch (error) {
+      if (!(error instanceof CloudError) || error.status !== 404) throw error;
+      // An owner can retry an accepted DELETE whose response was lost. A
+      // retained publish receipt proves ownership without exposing other assets.
+      const receipt = await this.db.prepare(`SELECT 1 FROM cloud_publish_requests r WHERE r.asset_id=? AND r.user_id=?
+        AND NOT EXISTS(SELECT 1 FROM cloud_assets a WHERE a.asset_id=r.asset_id)`).bind(assetId,userId).first();
+      if (!receipt) throw error;
+      return {assetId};
+    }
+    if (row.owner_user_id !== userId) throw new CloudError(403,'not_owner','Only the owner can delete a publication');
+    // Versions, likes and asset follows cascade. Keep publish receipts so an
+    // old request cannot recreate a deliberately deleted publication.
+    await this.db.prepare('DELETE FROM cloud_assets WHERE asset_id=? AND owner_user_id=?').bind(assetId,userId).run();
+    return {assetId};
   }
   async relations(assetId:string,userId:string|null) {
     const asset = await this.asset(assetId,userId);

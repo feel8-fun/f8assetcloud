@@ -23,4 +23,5 @@ export interface AssetRow {
   name: string; description: string; tags_json: string; visibility: 'public' | 'private';
   current_version: number; content_hash: string; license: string; updated_at: string;
 }
+export type LibraryKindFilter = AssetRow['kind'] | 'all';
 export interface VersionRow { version: number; content_hash: string; publication_json: string; created_at: string; change_summary: string }

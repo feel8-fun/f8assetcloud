@@ -16,8 +16,10 @@ export function registerLibraryRoutes(app:Hono<Env>,auth:Auth) {
   app.get('/v2/library', async (c) => {
     const viewer = await auth.viewer(c);
     const view = z.enum(['all','mine','following']).parse(c.req.query('view') ?? 'all');
+    const kind = z.enum(['all','graph','component','variant']).safeParse(c.req.query('kind') ?? 'all');
+    if (!kind.success) throw new CloudError(400,'invalid_kind','Choose all, graph, component or variant');
     if (view !== 'all' && viewer === null) throw new CloudError(401,'authentication_required','Sign in to view your Library');
-    return c.json(await new LibraryRepository(c.env.DB).search(viewer?.userId ?? null,(c.req.query('q') ?? '').slice(0,500),c.req.query('cursor') ?? '',view));
+    return c.json(await new LibraryRepository(c.env.DB).search(viewer?.userId ?? null,(c.req.query('q') ?? '').slice(0,500),c.req.query('cursor') ?? '',view,kind.data));
   });
   app.post('/v2/library/publish', async (c) => {
     const user = await auth.writer(c);
@@ -32,6 +34,10 @@ export function registerLibraryRoutes(app:Hono<Env>,auth:Auth) {
   app.put('/v2/library/:assetId/metadata', async (c) => {
     const user = await auth.writer(c);
     return c.json(await new LibraryRepository(c.env.DB).metadata(c.req.param('assetId'),user.userId,metadataSchema.parse(await auth.readJson(c.req.raw))));
+  });
+  app.delete('/v2/library/:assetId', async (c) => {
+    const user = await auth.writer(c);
+    return c.json(await new LibraryRepository(c.env.DB).deletePublication(c.req.param('assetId'),user.userId));
   });
   app.get('/v2/library/:assetId/versions', async (c) => {
     const user = await auth.viewer(c);

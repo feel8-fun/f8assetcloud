@@ -1,9 +1,13 @@
 import { DatabaseSync } from 'node:sqlite';
 
-export function createSqliteD1Database({ migrationsSql }) {
-  const database = new DatabaseSync(':memory:');
+export function createSqliteD1Database({ migrationsSql, databasePath = ':memory:' }) {
+  const database = new DatabaseSync(databasePath);
+  database.exec('PRAGMA foreign_keys = ON');
   database.exec(migrationsSql);
   return {
+    exec(sql) {
+      database.exec(sql);
+    },
     prepare(sql) {
       const statement = database.prepare(sql);
       let bindings = [];
